@@ -6,16 +6,19 @@
 #include <ArduinoJson.h> // https://github.com/bblanchon/ArduinoJson/releases/tag/v5.0.7
 int iPinTrigger = 5;
 int iPinEcho = 4;
-const char* ssid = "T4M2";
-const char* password = "8E85AE4B7D";
+const char* ssid = "iPhone de Jorge";
+const char* password = "chiviricuarta";
 const char* mqtt_server = "67.228.191.108";
 int estado;
 long lastMsg = 0;
 int promedio;
 int degrees;
-boolean magsensor1,a;
+boolean magsensor1, a;
 String parqueo;
+long now, lastpub;
 HMC5883L compass;
+boolean ultrasonic1;
+int comparative;
 void magsensorsetup() {
 
   Wire.begin(D5, D4); //sda, scl
@@ -49,7 +52,8 @@ PubSubClient client(espClient);
 
 
 void setup() {
-
+  delay(30000);
+  magsensorsetup();
   pinMode(BUILTIN_LED, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
   Serial.begin(115200);
   setup_wifi();
@@ -59,12 +63,19 @@ void setup() {
     magsensor();
     promedio += degrees;
   }
-  promedio /= 30;
+  promedio /= 30;  //    checkTime ();
   degrees = 0;
+  comparative = promedio ;
+
+  while (!client.connected()) {
+    reconnect();
+  }
+  publishAverage();
+  lastpub = millis();
+  now = millis();
 }
 
 void setup_wifi() {
-  magsensorsetup();
   pinMode(iPinTrigger, OUTPUT);
   pinMode(iPinEcho, INPUT);
   delay(10);
@@ -126,16 +137,37 @@ void reconnect() {
     }
   }
 }
+void publishAverage() {
+
+  StaticJsonBuffer<1024> jsonbuffer;
+  JsonObject& root = jsonbuffer.createObject();
+  JsonObject& d = root.createNestedObject("d");
+  JsonObject& data = d.createNestedObject("data");
+  data["average"] = promedio;
+  char payload[1024];
+  root.printTo(payload, sizeof(payload));
+
+  Serial.print("Sending payload: ");
+  Serial.println(payload);
+  if (client.publish("outTopic", payload, byte(sizeof(payload)))) {
+    Serial.println("Publish OK");
+  }
+  else {
+    Serial.println("Publish FAILED");
+  }
+  delay(1000);
+
+}
+
 void publishData() {
-  //    checkTime ();
   StaticJsonBuffer<1024> jsonbuffer;
   JsonObject& root = jsonbuffer.createObject();
   JsonObject& d = root.createNestedObject("d");
   JsonObject& data = d.createNestedObject("data");
   data["Mag"] = degrees;
   data["US"] = estado;
-  data["state"]=parqueo;
-//   data["timestamp"] = ISO8601;
+  data["state"] = parqueo;
+  //   data["timestamp"] = ISO8601;
   char payload[1024];
   root.printTo(payload, sizeof(payload));
 
@@ -151,27 +183,46 @@ void publishData() {
 
 }
 void loop() {
+  if (!ultrasonic1) {
+    ultrasonicsensor();
+    if (estado < 50) {
+      ultrasonic1 = true;
+      now = millis();
+    }
+  }
+  if (ultrasonic1) {
+    magsensor();
+    if (degrees < comparative - 10 || degrees > comparative + 10) {
+      magsensor1 = true;
+      parqueo = "ocupado";
+    } else {
+      ultrasonicsensor();
+      if (estado > 50) {
+        ultrasonic1 = false; 
+        magsensor1 = false;
+      parqueo = "desocupado";
 
+      }
+    }
+    if (magsensor1) {
+      Serial.println(now);
+      Serial.println((millis() / 1000));
+      Serial.println(millis());
+     
+    }
+  }
+ if (now - lastpub > 30000) {
+        if (a != magsensor1) {
+          publishData();
+          a = magsensor1;
+          lastpub = millis();
+        }
+      }
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
-  long now = millis();
-  if (now - lastMsg > 30000) {
-        if(magsensor1=true){
-          parqueo ="ocupado";
-        }else{
-          parqueo="desocupado";
-        }
-      if(a!= magsensor1){
-      publishData();
-      lastMsg = millis();
-      delay(1000);
-    a=magsensor1;
-    }
-  }
-  ultrasonicsensor();
-  magsensor();
+now=millis();
 }
 
 void ultrasonicsensor() {
@@ -181,12 +232,6 @@ void ultrasonicsensor() {
   delayMicroseconds(10);
   digitalWrite(iPinTrigger, LOW);
 
-  /*
-  Speed = 347.867m/s (Speed of sound @ 28 degrees celcius)
-  Time = fTime
-  Speed = Distance / Time
-  Distance = Speed * Time
-  */
 
   //Read the data from the sensor
   double fTime = pulseIn(iPinEcho, HIGH);
@@ -241,13 +286,6 @@ void magsensor() {
   Serial.print(headingDegrees);
   Serial.println();
   degrees = headingDegrees;
-  if(estado < 30){
-  if(degrees<promedio-10||degrees>promedio+10){
-    magsensor1=true;
-    
-  }
-  }else{
-    magsensor1=false;
-  }
+
   delay(100);
 }
